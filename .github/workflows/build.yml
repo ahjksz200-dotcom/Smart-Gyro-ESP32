@@ -1,13 +1,14 @@
-name: Build-Smart-Gyro-BIN
+name: Build-Smart-Gyro-ESP32
 
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch:
+  workflow_dispatch: # Cho phép nhấn nút "Run workflow" thủ công
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -20,17 +21,25 @@ jobs:
       - name: Install ESP32 Platform
         run: |
           arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          # Ép sử dụng bản Core 3.x để đồng bộ với code ledcAttach
           arduino-cli core install esp32:esp32@3.0.7 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
 
-      - name: Compile
+      - name: Compile Sketch
         run: |
+          # Cấu hình cực kỳ quan trọng để sửa lỗi "invalid header"
+          # dout: Chế độ an toàn nhất cho chip Flash
+          # 0x10000: Địa chỉ nạp mặc định cho ứng dụng
           arduino-cli compile --fqbn esp32:esp32:esp32 \
-          --build-property "build.flash_mode=dio" \
+          --build-property "build.flash_mode=dout" \
+          --build-property "build.flash_freq=40m" \
           --output-dir ./build ./Smart_Gyro/Smart_Gyro.ino
 
-      - name: Upload BIN
+      - name: Upload BIN Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Smart-Gyro-Firmware
-          path: ./build/*.bin
-          
+          path: |
+            ./build/*.bin
+            ./build/*.partitions.bin
+            ./build/*.bootloader.bin
+            
