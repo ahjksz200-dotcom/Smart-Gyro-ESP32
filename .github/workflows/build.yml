@@ -1,0 +1,36 @@
+name: Build-Smart-Gyro-BIN
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+          sudo mv bin/arduino-cli /usr/local/bin/
+
+      - name: Install ESP32 Platform
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.0.7 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+
+      - name: Compile
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32 \
+          --build-property "build.flash_mode=dio" \
+          --output-dir ./build ./Smart_Gyro/Smart_Gyro.ino
+
+      - name: Upload BIN
+        uses: actions/upload-artifact@v4
+        with:
+          name: Smart-Gyro-Firmware
+          path: ./build/*.bin
+          
