@@ -1,57 +1,61 @@
-#include <Wire.h>
+#include <SPI.h>
 
-#define MPU_ADDR 0x68
+// Định nghĩa chân SPI cho ESP32
+#define CS_PIN 5
 
 void setup() {
   Serial.begin(115200);
   delay(2000);
-  Serial.println("\n--- MPU6500 DIAGNOSTIC START ---");
+  Serial.println("\n--- MPU6500 SPI DIAGNOSTIC ---");
 
-  Wire.begin(21, 22); // SDA=21, SCL=22
-  Wire.setClock(400000);
+  // Khởi tạo SPI
+  SPI.begin(18, 19, 23, CS_PIN); // SCK, MISO, MOSI, SS
+  pinMode(CS_PIN, OUTPUT);
+  digitalWrite(CS_PIN, HIGH);
 
-  // 1. Kiểm tra xem có thiết bị nào trên đường dây I2C không
-  Wire.beginTransmission(MPU_ADDR);
-  byte error = Wire.endTransmission();
-
-  if (error == 0) {
-    Serial.println("[OK] Da tim thay MPU6500 tai dia chi 0x68");
-  } else {
-    Serial.println("[ERROR] Khong tim thay MPU6500. Kiem tra day SDA/SCL va Nguon!");
-    while (1); // Dung lai neu khong co cam bien
-  }
-
-  // 2. Khoi dong MPU6500
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x6B); 
-  Wire.write(0x00); // Danh thuc MPU
-  if (Wire.endTransmission() != 0) {
-    Serial.println("[ERROR] Khong the khoi tao MPU6500!");
-    while (1);
-  }
+  // Thử đọc thanh ghi WHO_AM_I (Địa chỉ 0x75)
+  // MPU6500 sẽ trả về giá trị 0x70 nếu còn sống
+  byte whoAmI = readRegister(0x75);
   
-  Serial.println("[OK] MPU6500 da san sang. Dang doc du lieu...");
+  Serial.print("WHO_AM_I Register: 0x");
+  Serial.println(whoAmI, HEX);
+
+  if (whoAmI == 0x70 || whoAmI == 0x71) {
+    Serial.println("[SUCCESS] MPU6500 phan hoi qua SPI!");
+  } else {
+    Serial.println("[FAILED] Khong nhan dang duoc MPU6500 qua SPI.");
+    Serial.println("Kiem tra lai day AD0 -> 19 va SCL/SDA -> 18/23");
+    // Khong dung lai, cu thu doc tiep xem co so lieu không
+  }
+
+  // Danh thuc MPU6500 (Power Management 1)
+  writeRegister(0x6B, 0x00);
 }
 
 void loop() {
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x3B); // Bat dau tu thanh ghi cam bien gia toc
-  if (Wire.endTransmission(false) != 0) {
-    Serial.println("\n[!] Mat ket noi voi MPU6500!");
-    delay(500);
-    return;
-  }
+  // Doc gia toc truc Z (vi du)
+  int16_t az = (readRegister(0x3F) << 8) | readRegister(0x40);
+  
+  Serial.print("Accel Z (SPI): ");
+  Serial.println(az);
+  
+  delay(200);
+}
 
-  Wire.requestFrom(MPU_ADDR, 6);
-  if (Wire.available() == 6) {
-    int16_t ax = Wire.read() << 8 | Wire.read();
-    int16_t ay = Wire.read() << 8 | Wire.read();
-    int16_t az = Wire.read() << 8 | Wire.read();
+// Ham doc thanh ghi qua SPI
+byte readRegister(byte reg) {
+  byte data;
+  digitalWrite(CS_PIN, LOW);
+  SPI.transfer(reg | 0x80); // Set bit cao nhat de doc
+  data = SPI.transfer(0x00);
+  digitalWrite(CS_PIN, HIGH);
+  return data;
+}
 
-    Serial.print("AccX: "); Serial.print(ax);
-    Serial.print(" | AccY: "); Serial.print(ay);
-    Serial.print(" | AccZ: "); Serial.println(az);
-  }
-
-  delay(100); // Doc moi 0.1 giay cho de nhìn
+// Ham ghi thanh ghi qua SPI
+void writeRegister(byte reg, byte val) {
+  digitalWrite(CS_PIN, LOW);
+  SPI.transfer(reg & 0x7F); // Bit cao nhat = 0 de ghi
+  SPI.transfer(val);
+  digitalWrite(CS_PIN, HIGH);
 }
