@@ -7,58 +7,67 @@
 #define P_IN 14
 #define R_IN 27
 
-// --- Cấu hình PWM cho Core 3.x ---
+// --- Cấu hình PWM Core 3.x ---
 const int FREQ = 50;
 const int RES = 16;
-const int MAX_DUTY = 65535; // 2^16 - 1
+const int MAX_DUTY = 65535;
 
-// --- Cấu hình PID (Có thể tinh chỉnh tùy loại máy bay) ---
 struct PID { float kp, ki, kd, i, last; };
-PID pP = {18.0, 0.04, 2.2}; // Pitch: Tăng P một chút để đầm hơn
-PID rP = {16.0, 0.04, 2.0}; // Roll
-PID yP = {14.0, 0.02, 1.2}; // Yaw (Kháng gió ngang)
+PID pP = {16.0, 0.05, 2.0}, rP = {16.0, 0.05, 2.0}, yP = {12.0, 0.02, 1.0};
 
-// --- Biến hệ thống ---
 float ax, ay, az, gx, gy, gz, oX, oY, oZ, r = 0, p = 0;
 unsigned long lT;
-const float deadband = 2.0; // Vùng đệm nhiễu cho tay điều khiển
+
+// --- Bộ lọc RX (Tránh Servo quay liên tục) ---
+long filterRX(int pin) {
+  long p = pulseIn(pin, HIGH, 25000);
+  if (p < 900 || p > 2100) return 1500; // Trả về trung tâm nếu nhiễu hoặc mất sóng
+  return p;
+}
 
 void setup() {
   Serial.begin(115200);
-  delay(2000); // Ổn định nguồn tránh lỗi "invalid header"
+  
+  // 1. Khởi động mềm: Giữ Servo ở 1500us trước khi kích hoạt PID
+  ledcAttach(L_PIN, FREQ, RES);
+  ledcAttach(R_PIN, FREQ, RES);
+  ledcWrite(L_PIN, (1500.0 / 20000.0) * MAX_DUTY);
+  ledcWrite(R_PIN, (1500.0 / 20000.0) * MAX_DUTY);
+  
+  delay(2000); 
   Wire.begin(21, 22);
-  Wire.setClock(400000); // Tăng tốc độ I2C lên 400kHz để mượt hơn
+  Wire.setClock(400000);
   
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x6B); Wire.write(0x00);
   Wire.endTransmission();
 
-  // 1. Cân bằng (Calibration): Tính toán sai số Gyro
-  Serial.println(">>> CALIBRATING... DO NOT MOVE!");
+  // 2. Calib Gyro với lọc nhiễu tĩnh
+  Serial.println(">>> CALIBRATING...");
   float sX=0, sY=0, sZ=0;
-  for(int i=0; i<400; i++){ // Tăng số mẫu để Calib chính xác hơn
+  for(int i=0; i<200; i++){
     Wire.beginTransmission(MPU_ADDR); Wire.write(0x43); Wire.endTransmission(false);
     Wire.requestFrom(MPU_ADDR, 6);
     sX += (int16_t)(Wire.read()<<8|Wire.read())/131.0;
     sY += (int16_t)(Wire.read()<<8|Wire.read())/131.0;
     sZ += (int16_t)(Wire.read()<<8|Wire.read())/131.0;
-    delay(3);
+    delay(2);
   }
-  oX=sX/400; oY=sY/400; oZ=sZ/400;
+  oX=sX/200; oY=sY/200; oZ=sZ/200;
 
-  // 2. Thiết lập PWM v3.x
-  ledcAttach(L_PIN, FREQ, RES);
-  ledcAttach(R_PIN, FREQ, RES);
-
-  pinMode(P_IN, INPUT); pinMode(R_IN, INPUT);
+  pinMode(P_IN, INPUT_PULLDOWN); // Ép chân RX xuống Low nếu lỏng dây
+  pinMode(R_IN, INPUT_PULLDOWN);
+  
   lT = micros();
   Serial.println(">>> SYSTEM ARMED & READY!");
 }
 
 float calcPID(float t, float a, PID &d, float dt) {
   float e = t - a;
-  if (abs(e) < 0.5) e = 0; // Vùng đệm nhỏ để servo không bị run (jitter)
-  d.i = constrain(d.i + e * dt, -150, 150); // Giới hạn I để tránh vọt lố
+  // Anti-windup: Chỉ tính I khi máy bay chưa kịch lái
+  if (abs(e) > 0.5) d.i = constrain(d.i + e * dt, -100, 100);
+  else d.i = d.i * 0.95; // Reset I dần khi đã cân bằng để tránh trôi
+  
   float dv = (e - d.last) / dt;
   d.last = e;
   return (e * d.kp) + (d.i * d.ki) + (dv * d.kd);
@@ -66,10 +75,10 @@ float calcPID(float t, float a, PID &d, float dt) {
 
 void loop() {
   float dt = (micros() - lT) / 1000000.0;
-  if (dt <= 0 || dt > 0.1) dt = 0.005; // Giới hạn dt để PID không bị nhảy loạn
+  if (dt <= 0 || dt > 0.1) dt = 0.01;
   lT = micros();
 
-  // 3. Đọc dữ liệu MPU6500 và Lọc Complementary
+  // 3. Đọc cảm biến
   Wire.beginTransmission(MPU_ADDR); Wire.write(0x3B); Wire.endTransmission(false);
   Wire.requestFrom(MPU_ADDR, 14);
   ax = (int16_t)(Wire.read()<<8|Wire.read())/16384.0;
@@ -80,29 +89,28 @@ void loop() {
   gy = ((int16_t)(Wire.read()<<8|Wire.read())/131.0)-oY;
   gz = ((int16_t)(Wire.read()<<8|Wire.read())/131.0)-oZ;
 
+  // Lọc bổ trợ 98/2
   p = 0.98*(p + gy*dt) + 0.02*(atan2(ax, sqrt(ay*ay+az*az))*180/PI);
   r = 0.98*(r + gx*dt) + 0.02*(atan2(ay, az)*180/PI);
 
-  // 4. Failsafe: Tự động giữ thăng bằng khi mất sóng
-  long pI = pulseIn(P_IN, HIGH, 30000); // 30ms timeout
-  long rI = pulseIn(R_IN, HIGH, 30000);
+  // 4. Đọc RX với bộ lọc Failsafe mới
+  long pI = filterRX(P_IN);
+  long rI = filterRX(R_IN);
   
-  float tP = 0, tR = 0;
-  if (pI > 900 && pI < 2100) tP = map(pI, 1000, 2000, -35, 35);
-  if (rI > 900 && rI < 2100) tR = map(rI, 1000, 2000, -35, 35);
+  float tP = map(pI, 1000, 2000, -35, 35);
+  float tR = map(rI, 1000, 2000, -35, 35);
 
-  // 5. Tính toán PID cho 3 trục
+  // 5. PID & Mixer
   float oP = calcPID(tP, p, pP, dt);
   float oR = calcPID(tR, r, rP, dt);
-  float oY = calcPID(0, gz, yP, dt); // Kháng Yaw tự động
+  float oY = calcPID(0, gz, yP, dt);
 
-  // 6. Mixer Elevon với bảo vệ Servo
-  float vL = constrain(1500 + oP + oR + oY, 1050, 1950);
-  float vR = constrain(1500 - oP + oR + oY, 1050, 1950);
+  float vL = constrain(1500 + oP + oR + oY, 1100, 1900);
+  float vR = constrain(1500 - oP + oR + oY, 1100, 1900);
 
-  // Xuất PWM với độ phân giải cao
+  // Xuất xung mượt
   ledcWrite(L_PIN, (vL / 20000.0) * MAX_DUTY);
   ledcWrite(R_PIN, (vR / 20000.0) * MAX_DUTY);
 
-  delay(4); // Tốc độ vòng lặp ổn định ~250Hz
+  delay(5);
 }
