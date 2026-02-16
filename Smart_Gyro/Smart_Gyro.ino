@@ -105,8 +105,9 @@ void loop() {
   float oR = calcPID(tR, r, rP, dt);
   float oY = calcPID(0, gz, yP, dt);
 
-  float vL = constrain(1500 + oP + oR + oY, 1100, 1900);
-  float vR = constrain(1500 - oP + oR + oY, 1100, 1900);
+  float vL = constrain(1500 + oP + oR + oY, 1200, 1800); // Giới hạn từ 1200us đến 1800us
+  float vR = constrain(1500 - oP + oR + oY, 1200, 1800);
+
 
   // Xuất xung mượt
   ledcWrite(L_PIN, (vL / 20000.0) * MAX_DUTY);
